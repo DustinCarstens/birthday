@@ -4,11 +4,11 @@
 
 let appState = {
     currentSection: 'intro',
-    guests: [
-        { id: 1, name: 'Sample Guest', status: 'pending' }
-    ],
+    guests: [],
     photoImage: null
 };
+
+const API_URL = 'http://localhost:5000/api';
 
 // =====================================================
 // INITIALIZATION
@@ -17,14 +17,13 @@ let appState = {
 document.addEventListener('DOMContentLoaded', function() {
     console.log('🎉 Birthday Party Website Loaded');
     initializeApp();
-    loadFromLocalStorage();
-    renderGuestList();
     setupEventListeners();
 });
 
 function initializeApp() {
     updateConfirmedCount();
     navigateTo('intro');
+    loadGuests();  // Load from Flask backend
 }
 
 function setupEventListeners() {
@@ -44,18 +43,6 @@ function setupEventListeners() {
             }
         });
     }
-
-    // Save data before page unload
-    window.addEventListener('beforeunload', function() {
-        saveToLocalStorage();
-    });
-
-    // Auto-save on visibility change
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            saveToLocalStorage();
-        }
-    });
 }
 
 // =====================================================
@@ -69,7 +56,6 @@ function handlePhotoUpload(e) {
         reader.onload = function(event) {
             appState.photoImage = event.target.result;
             displayPhoto();
-            saveToLocalStorage();
             showNotification('Photo uploaded successfully', 'success');
             console.log('📸 Photo uploaded');
         };
@@ -99,7 +85,6 @@ function removePhoto() {
         if (photoBannerContainer) {
             photoBannerContainer.classList.add('hidden');
         }
-        saveToLocalStorage();
         showNotification('Photo removed', 'success');
         console.log('🗑️ Photo removed');
     }
@@ -151,10 +136,10 @@ function updateNavigation(activeSection) {
 }
 
 // =====================================================
-// GUEST MANAGEMENT
+// GUEST MANAGEMENT - ASYNC API CALLS
 // =====================================================
 
-function addGuest() {
+async function addGuest() {
     const input = document.getElementById('guestInput');
     const name = input.value.trim();
 
@@ -170,60 +155,112 @@ function addGuest() {
         return;
     }
 
-    // Check for duplicates
-    if (appState.guests.some(guest => guest.name.toLowerCase() === name.toLowerCase())) {
-        showNotification('This guest has already been added', 'warning');
+    try {
+        const response = await fetch(`${API_URL}/guests`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: name,
+                status: 'pending'
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            showNotification(data.message || 'Error adding guest', 'error');
+            return;
+        }
+
+        showNotification(`✓ ${name} added successfully`, 'success');
         input.value = '';
         input.focus();
-        return;
-    }
-
-    // Add guest
-    const newGuest = {
-        id: Date.now(),
-        name: escapeHtml(name),
-        status: 'pending'
-    };
-
-    appState.guests.push(newGuest);
-    input.value = '';
-    input.focus();
-
-    renderGuestList();
-    updateConfirmedCount();
-    saveToLocalStorage();
-
-    showNotification(`✓ ${name} added successfully`, 'success');
-    console.log(`👤 Guest added: ${name}`);
-}
-
-function updateGuestStatus(id, newStatus) {
-    const guest = appState.guests.find(g => g.id === id);
-    if (guest) {
-        const oldStatus = guest.status;
-        guest.status = newStatus;
         
-        updateConfirmedCount();
-        saveToLocalStorage();
-        
-        console.log(`📝 Guest status updated: ${guest.name} - ${oldStatus} → ${newStatus}`);
+        await loadGuests();  // Refresh list from server
+        console.log(`👤 Guest added: ${name}`);
+
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('Failed to add guest', 'error');
     }
 }
 
-function removeGuest(id) {
-    const guest = appState.guests.find(g => g.id === id);
-    if (guest) {
-        const guestName = guest.name;
-        appState.guests = appState.guests.filter(g => g.id !== id);
-        
-        renderGuestList();
-        updateConfirmedCount();
-        saveToLocalStorage();
-        
-        showNotification(`✓ ${guestName} removed`, 'success');
-        console.log(`🗑️ Guest removed: ${guestName}`);
+async function loadGuests() {
+    try {
+        const response = await fetch(`${API_URL}/guests`);
+        const data = await response.json();
+
+        if (data.success) {
+            appState.guests = data.guests;
+            renderGuestList();
+            updateConfirmedCount();
+            console.log('✅ Guests loaded from server');
+        }
+
+    } catch (error) {
+        console.error('Error loading guests:', error);
+        showNotification('Error loading guests', 'error');
     }
 }
+
+async function updateGuestStatus(id, newStatus) {
+    try {
+        const response = await fetch(`${API_URL}/guests/${id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                status: newStatus
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            showNotification(data.message || 'Error updating status', 'error');
+            return;
+        }
+
+        await loadGuests();  // Refresh from server
+        console.log(`📝 Guest status updated to: ${newStatus}`);
+
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('Failed to update status', 'error');
+    }
+}
+
+async function removeGuest(id) {
+    if (!confirm('Remove this guest?')) return;
+
+    try {
+        const response = await fetch(`${API_URL}/guests/${id}`, {
+            method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            showNotification(data.message || 'Error removing guest', 'error');
+            return;
+        }
+
+        showNotification('✓ Guest removed', 'success');
+        await loadGuests();  // Refresh from server
+        console.log('🗑️ Guest removed');
+
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('Failed to remove guest', 'error');
+    }
+}
+
+// =====================================================
+// RENDER FUNCTIONS
+// =====================================================
 
 function renderGuestList() {
     const guestList = document.getElementById('guestList');
@@ -271,9 +308,7 @@ function createGuestElement(guest, index) {
         </div>
     `;
 
-    // Set the current status value
     div.querySelector('select').value = guest.status;
-    
     return div;
 }
 
@@ -332,123 +367,6 @@ function getNotificationClass(type) {
 }
 
 // =====================================================
-// DATA PERSISTENCE
-// =====================================================
-
-function saveToLocalStorage() {
-    try {
-        const dataToSave = {
-            guests: appState.guests,
-            photoImage: appState.photoImage,
-            savedAt: new Date().toISOString()
-        };
-        localStorage.setItem('birthdayAppState', JSON.stringify(dataToSave));
-        console.log('💾 Data saved to local storage');
-    } catch (error) {
-        console.error('Local storage error:', error);
-        showNotification('Error saving data', 'error');
-    }
-}
-
-function loadFromLocalStorage() {
-    try {
-        const savedState = localStorage.getItem('birthdayAppState');
-        if (savedState) {
-            const parsed = JSON.parse(savedState);
-            appState.guests = parsed.guests || appState.guests;
-            appState.photoImage = parsed.photoImage || appState.photoImage;
-
-            // Restore photo
-            if (appState.photoImage) {
-                displayPhoto();
-            }
-
-            renderGuestList();
-            updateConfirmedCount();
-            console.log('📂 Data loaded from local storage');
-        }
-    } catch (error) {
-        console.error('Local storage load error:', error);
-    }
-}
-
-function clearLocalStorage() {
-    if (confirm('Are you sure you want to clear all data?')) {
-        localStorage.removeItem('birthdayAppState');
-        appState.guests = [];
-        appState.photoImage = null;
-        renderGuestList();
-        updateConfirmedCount();
-        const photoBannerContainer = document.getElementById('photoBannerContainer');
-        if (photoBannerContainer) {
-            photoBannerContainer.classList.add('hidden');
-        }
-        showNotification('All data cleared', 'success');
-        console.log('🗑️ Local storage cleared');
-    }
-}
-
-// =====================================================
-// IMPORT/EXPORT
-// =====================================================
-
-function exportGuestList() {
-    try {
-        const exportData = {
-            guests: appState.guests,
-            exportDate: new Date().toLocaleString(),
-            totalGuests: appState.guests.length,
-            confirmedGuests: appState.guests.filter(g => g.status === 'confirmed').length
-        };
-
-        const dataStr = JSON.stringify(exportData, null, 2);
-        const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        const url = URL.createObjectURL(dataBlob);
-        const link = document.createElement('a');
-        
-        link.href = url;
-        link.download = `guest-list-${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-
-        showNotification('Guest list exported successfully', 'success');
-        console.log('📥 Guest list exported');
-    } catch (error) {
-        console.error('Export error:', error);
-        showNotification('Error exporting guest list', 'error');
-    }
-}
-
-function importGuestList(file) {
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        try {
-            const imported = JSON.parse(e.target.result);
-            
-            if (Array.isArray(imported.guests)) {
-                appState.guests = imported.guests;
-            } else if (Array.isArray(imported)) {
-                appState.guests = imported;
-            } else {
-                throw new Error('Invalid file format');
-            }
-
-            renderGuestList();
-            updateConfirmedCount();
-            saveToLocalStorage();
-            showNotification('Guest list imported successfully', 'success');
-            console.log('📤 Guest list imported');
-        } catch (error) {
-            showNotification('Error reading file', 'error');
-            console.error('Import error:', error);
-        }
-    };
-    reader.readAsText(file);
-}
-
-// =====================================================
 // UTILITY FUNCTIONS
 // =====================================================
 
@@ -463,30 +381,55 @@ function escapeHtml(text) {
     return text.replace(/[&<>"']/g, m => map[m]);
 }
 
-function getGuestStats() {
-    return {
-        total: appState.guests.length,
-        confirmed: appState.guests.filter(g => g.status === 'confirmed').length,
-        pending: appState.guests.filter(g => g.status === 'pending').length,
-        declined: appState.guests.filter(g => g.status === 'declined').length
-    };
+// =====================================================
+// CONSOLE UTILITIES (For Debugging)
+// =====================================================
+
+async function getStats() {
+    try {
+        const response = await fetch(`${API_URL}/stats`);
+        const data = await response.json();
+        console.log('📈 Guest Statistics:', data);
+        return data;
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+async function exportGuests() {
+    try {
+        const response = await fetch(`${API_URL}/export`);
+        const data = await response.json();
+        
+        const dataStr = JSON.stringify(data, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        
+        link.href = url;
+        link.download = `guests-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        showNotification('Guest list exported', 'success');
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('Export failed', 'error');
+    }
 }
 
 // =====================================================
-// CONSOLE UTILITIES (for debugging)
+// MAKE FUNCTIONS AVAILABLE IN CONSOLE
 // =====================================================
 
-function showAppState() {
-    console.log('📊 Current App State:', appState);
-    console.log('📈 Guest Stats:', getGuestStats());
-}
-
-// Make functions available in console
-window.showAppState = showAppState;
-window.exportGuestList = exportGuestList;
-window.clearLocalStorage = clearLocalStorage;
-window.getGuestStats = getGuestStats;
+window.getStats = getStats;
+window.exportGuests = exportGuests;
 window.removePhoto = removePhoto;
 
 console.log('✅ All functions loaded and ready');
-console.log('💡 Tip: Use showAppState() to view current state in console');
+console.log('💡 Console commands available:');
+console.log('   - getStats()      : View guest statistics');
+console.log('   - exportGuests()  : Download guest list as JSON');
+console.log('   - removePhoto()   : Remove uploaded photo');
